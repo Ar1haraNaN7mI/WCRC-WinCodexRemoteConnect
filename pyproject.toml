@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wcrc-wincodexremoteconnect"
+version = "0.1.0"
+description = "A small mTLS-protected remote command bridge for temporary Codex/server maintenance."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Ar1haraNaN7mI" }]
+dependencies = ["cryptography>=42.0.0"]
+
+[project.scripts]
+wcrc-make-certs = "wcrc.make_certs:main"
+wcrc-server = "wcrc.remote_exec_server:main"
+wcrc-client = "wcrc.remote_exec_client:main"
+
+[tool.setuptools]
+packages = ["wcrc"]

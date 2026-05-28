@@ -1,0 +1,210 @@
+# WCRC - WinCodex Remote Connect
+
+WCRC is a small mutual-TLS remote command bridge for temporary server maintenance when SSH is unavailable or not exposed.
+
+It was designed for a Windows cloud server with only a few public port mappings, but it also runs on Linux. The server accepts one JSON command per TLS connection, runs it inside a configured base directory, returns stdout/stderr, and writes an audit log.
+
+## Security Model
+
+- Mutual TLS is required. The server only accepts clients signed by your local CA.
+- The client verifies the server certificate using the same CA.
+- `client.key` stays on your local machine. Never upload it to the server.
+- Commands are constrained to `--base-dir` for working directories.
+- Shell mode is disabled unless the server is started with `--allow-shell`.
+- The tool installs no persistence. Stop the server process when the maintenance window ends.
+
+This is not a replacement for a hardened SSH deployment. Use it as an explicit, short-lived maintenance bridge.
+
+## Requirements
+
+- Python 3.10+
+- `cryptography` for certificate generation
+- No third-party dependency is required by the server/client runtime after certificates are generated
+
+Install dependencies locally:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Or install the project in editable mode:
+
+```powershell
+python -m pip install -e .
+```
+
+## 1. Generate Certificates Locally
+
+Run this on your local machine, not on the server:
+
+```powershell
+python -m wcrc.make_certs --server-ip YOUR_SERVER_PUBLIC_IP
+```
+
+For a DNS name:
+
+```powershell
+python -m wcrc.make_certs --server-dns example.com
+```
+
+Generated files are written to `certs/`.
+
+Upload to the server:
+
+```text
+wcrc/remote_exec_server.py
+wcrc/__init__.py
+certs/ca.crt
+certs/server.crt
+certs/server.key
+scripts/start-server.example.cmd
+```
+
+Keep local only:
+
+```text
+certs/client.crt
+certs/client.key
+certs/ca.crt
+wcrc/remote_exec_client.py
+```
+
+## 2. Create a Server Bundle
+
+After generating certs, create a zip containing only the server-side files:
+
+```powershell
+.\scripts\make-server-bundle.ps1
+```
+
+This creates:
+
+```text
+wcrc-server-bundle.zip
+```
+
+Copy that zip to the server and extract it.
+
+## 3. Start the Server
+
+On the Windows server, edit `start-server.cmd`:
+
+- `PORT` is the internal port the cloud provider maps from the public port.
+- `BASE_DIR` is the directory where remote commands are allowed to run.
+
+Then run:
+
+```cmd
+start-server.cmd
+```
+
+Equivalent direct command:
+
+```cmd
+python -m wcrc.remote_exec_server ^
+  --host 0.0.0.0 ^
+  --port 49606 ^
+  --ca certs\ca.crt ^
+  --cert certs\server.crt ^
+  --key certs\server.key ^
+  --base-dir C:\Users\Administrator\Desktop ^
+  --allow-shell ^
+  --timeout 300 ^
+  --log remote_exec_server.log
+```
+
+If Windows Firewall blocks the internal port, run an Administrator CMD after editing the port:
+
+```cmd
+netsh advfirewall firewall add rule name="WCRC mTLS remote bridge" dir=in action=allow protocol=TCP localport=49606
+```
+
+## 4. Connect from Local
+
+Run an argv command:
+
+```powershell
+python -m wcrc.remote_exec_client `
+  --host YOUR_SERVER_PUBLIC_IP `
+  --port 18785 `
+  --ca certs\ca.crt `
+  --cert certs\client.crt `
+  --key certs\client.key `
+  -- whoami
+```
+
+Run a PowerShell command through shell mode:
+
+```powershell
+python -m wcrc.remote_exec_client `
+  --host YOUR_SERVER_PUBLIC_IP `
+  --port 18785 `
+  --ca certs\ca.crt `
+  --cert certs\client.crt `
+  --key certs\client.key `
+  --shell "Get-ChildItem | Select-Object Name,Length"
+```
+
+Print raw JSON:
+
+```powershell
+python -m wcrc.remote_exec_client `
+  --host YOUR_SERVER_PUBLIC_IP `
+  --port 18785 `
+  --ca certs\ca.crt `
+  --cert certs\client.crt `
+  --key certs\client.key `
+  --json `
+  -- powershell -NoProfile -Command "$PSVersionTable.PSVersion"
+```
+
+## Linux Server Example
+
+```bash
+python3 -m wcrc.remote_exec_server \
+  --host 0.0.0.0 \
+  --port 49606 \
+  --ca certs/ca.crt \
+  --cert certs/server.crt \
+  --key certs/server.key \
+  --base-dir /srv \
+  --allow-shell \
+  --timeout 180 \
+  --log remote_exec_server.log
+```
+
+## Audit Log
+
+The server writes JSON Lines records to `remote_exec_server.log`, including:
+
+- UTC time
+- client certificate common name
+- remote IP
+- mode
+- command
+- cwd
+- return code
+- duration
+
+Stdout and stderr are returned to the authenticated client but are not stored in the audit log by default.
+
+## Operational Checklist
+
+1. Generate certificates locally with the server public IP or DNS in SAN.
+2. Build and upload only the server bundle.
+3. Open one mapped TCP port to the server internal port.
+4. Start `start-server.cmd` in a visible console.
+5. Run client commands from local.
+6. Stop the server process after maintenance.
+
+## Development
+
+Run a quick syntax and certificate generation smoke test:
+
+```powershell
+.\scripts\smoke-test.ps1
+```
+
+## Repository Safety
+
+The `.gitignore` excludes generated certs, private keys, logs, and bundles. Review `git status` before pushing if you generated secrets in a non-default path.

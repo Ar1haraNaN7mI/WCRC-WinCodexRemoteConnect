@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.log
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Generated secrets and bundles
+certs/
+output/
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+upload-to-server.zip
+wcrc-server-bundle.zip
+
+# Local editor/system files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
