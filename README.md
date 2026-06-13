@@ -34,9 +34,51 @@ Or install the project in editable mode:
 python -m pip install -e .
 ```
 
-## Fast Path: Guided Setup Window
+## Guided Setup Tutorial
 
-The easiest way to generate certificates and connection files is the guided setup window:
+The guided setup window is the recommended path for first-time use. It generates certificates, writes JSON config files, creates helper scripts, and builds a server-only zip that is safe to upload.
+
+### Before You Start
+
+Prepare these values:
+
+- Server public IP or DNS, for example `203.0.113.10` or `server.example.com`.
+- Public port that your local machine connects to, for example `18785`.
+- Internal server listen port, for example `49606`.
+- Server base directory, for example `C:\Users\Administrator\Desktop`.
+- A way to copy one zip file to the server, such as RDP, a cloud console file manager, `scp`, or any approved file transfer method.
+
+Port mapping can be confusing. If your cloud provider maps public port `18785` to server internal port `49606`, use:
+
+```text
+Public host: 203.0.113.10
+Public port: 18785
+Listen port: 49606
+```
+
+If there is no separate public port mapping, use the same value for `Public port` and `Listen port`.
+
+### 1. Install Dependencies Locally
+
+Run these commands on your local machine from the repository directory:
+
+```powershell
+cd C:\path\to\WCRC-WinCodexRemoteConnect
+python --version
+python -m pip install -r requirements.txt
+```
+
+Optional editable install:
+
+```powershell
+python -m pip install -e .
+```
+
+You only need `cryptography` while generating certificates. The generated server/client runtime code uses the Python standard library.
+
+### 2. Open the Setup Window
+
+Run:
 
 ```powershell
 python -m wcrc.setup_wizard
@@ -48,17 +90,31 @@ Or, after editable install:
 wcrc-setup
 ```
 
-Fill in:
+If the window does not open because `tkinter` is missing, install or use the standard Python build from python.org on Windows.
 
-- `Public host`: the server public IP or DNS used by the client. You can also enter `host:port`.
-- `Public port`: the public/cloud mapped port used by the client.
-- `Extra IP SANs` / `Extra DNS SANs`: optional extra certificate names if the same server is reached through more than one address.
-- `Listen port`: the internal port on the server process.
-- `Base directory`: the server directory where remote commands are allowed to run.
-- `Allow shell mode`: enables client `--shell` commands when checked.
-- `Output directory`: where the generated setup files will be written.
+### 3. Fill In the Wizard
 
-The wizard creates an output folder like:
+Use the following field guide:
+
+| Field | Example | Meaning |
+| --- | --- | --- |
+| `Public host` | `203.0.113.10` | The IP or DNS name used by the local client. This value is also added to the server certificate SAN. You can enter `host:port`; the wizard will reuse the port if the public port field still has the default value. |
+| `Public port` | `18785` | The public or cloud-mapped TCP port used by the client. |
+| `Extra IP SANs` | `10.0.0.5, 127.0.0.1` | Optional extra IPs accepted by TLS hostname verification. Leave empty for normal use. |
+| `Extra DNS SANs` | `server.example.com` | Optional extra DNS names accepted by TLS hostname verification. Leave empty for normal use. |
+| `Bind host` | `0.0.0.0` | Address the server process listens on. Use `0.0.0.0` for all interfaces or `127.0.0.1` for local-only testing. |
+| `Listen port` | `49606` | Internal TCP port opened by the server process. |
+| `Base directory` | `C:\Users\Administrator\Desktop` | Remote commands can only run inside this directory. A requested `--cwd` outside this path is rejected. |
+| `Allow shell mode` | checked | Allows `--shell "..."` commands. If unchecked, only argv commands after `--` are accepted. |
+| `Timeout seconds` | `300` | Maximum remote command runtime. Client-requested timeouts cannot exceed this server-side limit. |
+| `Certificate days` | `30` | Validity period for the generated CA, server certificate, and client certificate. |
+| `Output directory` | `output\guided-setup` | Local folder where the generated files are written. |
+
+Click `Generate setup`. The status box should show the generated output path and the server bundle zip path.
+
+### 4. Check the Generated Files
+
+The output directory contains both local-only files and server upload files:
 
 ```text
 output/guided-setup/
@@ -69,6 +125,7 @@ output/guided-setup/
     client.key
     server.crt
     server.key
+  wcrc/
   wcrc-client.json
   wcrc-command.cmd
   wcrc-shell.cmd
@@ -78,13 +135,23 @@ output/guided-setup/
   server-bundle/
 ```
 
+Keep these local:
+
+```text
+certs/ca.key
+certs/client.key
+certs/client.crt
+certs/ca.crt
+wcrc-client.json
+```
+
 Upload only this file to the server:
 
 ```text
 wcrc-server-bundle.zip
 ```
 
-The server bundle contains only server-side files:
+The server bundle contains only server-side material:
 
 ```text
 certs/ca.crt
@@ -100,32 +167,131 @@ README-SERVER.txt
 
 It intentionally does not include `client.key` or `ca.key`.
 
-On the server:
+### 5. Upload and Start the Server
+
+Copy `wcrc-server-bundle.zip` to the server, extract it, then open a CMD or PowerShell in the extracted folder.
+
+Before starting, you may inspect `wcrc-server.json`:
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 49606,
+  "ca": "certs/ca.crt",
+  "cert": "certs/server.crt",
+  "key": "certs/server.key",
+  "base_dir": "C:\\Users\\Administrator\\Desktop",
+  "allow_shell": true,
+  "timeout": 300,
+  "max_output": 4194304,
+  "log": "remote_exec_server.log"
+}
+```
+
+Start the server:
 
 ```cmd
-REM Extract wcrc-server-bundle.zip first.
 start-server.cmd
 ```
 
-If Windows Firewall blocks the internal listen port, run `firewall-rule.example.cmd` as Administrator after checking the port.
+Or:
 
-On your local machine, run from the guided setup output directory:
+```powershell
+.\start-server.ps1
+```
+
+Expected server output looks like:
+
+```text
+[2026-01-01T00:00:00+00:00] mTLS remote exec listening on 0.0.0.0:49606, base-dir=C:\Users\Administrator\Desktop
+```
+
+Keep this console open while using WCRC. Close it or press `Ctrl+C` when the maintenance window is done.
+
+If Windows Firewall blocks the internal listen port, run this from an Administrator CMD after checking the port in the file:
+
+```cmd
+firewall-rule.example.cmd
+```
+
+### 6. Connect From Your Local Machine
+
+On your local machine, go to the guided output directory:
+
+```powershell
+cd output\guided-setup
+```
+
+Run a basic test:
 
 ```powershell
 python -m wcrc.remote_exec_client --config .\wcrc-client.json -- whoami
 ```
 
-Or:
+The output should be the Windows account that started `start-server.cmd` on the server.
+
+You can also use the generated helper script:
 
 ```cmd
 wcrc-command.cmd whoami
 ```
 
-For shell mode, if enabled in the wizard:
+Run a command with arguments:
+
+```powershell
+python -m wcrc.remote_exec_client --config .\wcrc-client.json -- powershell -NoProfile -Command "$PSVersionTable.PSVersion"
+```
+
+Run inside a specific remote working directory under `base_dir`:
+
+```powershell
+python -m wcrc.remote_exec_client --config .\wcrc-client.json --cwd "C:\Users\Administrator\Desktop" -- cmd /c dir
+```
+
+Run shell mode if you enabled `Allow shell mode`:
+
+```powershell
+python -m wcrc.remote_exec_client --config .\wcrc-client.json --shell "Get-ChildItem | Select-Object Name,Length"
+```
+
+Or:
 
 ```cmd
 wcrc-shell.cmd "Get-ChildItem | Select-Object Name,Length"
 ```
+
+Print the raw JSON response for debugging:
+
+```powershell
+python -m wcrc.remote_exec_client --config .\wcrc-client.json --json -- whoami
+```
+
+### 7. Reconfigure or Rotate Certificates
+
+Run the wizard again when:
+
+- The server public IP or DNS changes.
+- The public or internal port changes.
+- You want a different `base_dir`.
+- The certificate validity period is ending.
+- You want to revoke old local client credentials by replacing the CA and all certificates.
+
+After regenerating, upload the new `wcrc-server-bundle.zip` and replace the old local `wcrc-client.json` and `certs/` files with the newly generated ones.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `ModuleNotFoundError: No module named 'cryptography'` | Dependencies were not installed before generating certificates. | Run `python -m pip install -r requirements.txt`. |
+| Setup window does not open | `tkinter` is missing from the Python install. | Use the standard Windows Python installer or install a Python build with Tk support. |
+| Client times out | Public port mapping, cloud security group, firewall, or server process is not reachable. | Confirm the server console is open, confirm `Listen port`, cloud mapping, and Windows Firewall. |
+| `Connection refused` | Nothing is listening on the target port. | Start `start-server.cmd` and verify the port in `wcrc-server.json`. |
+| TLS hostname or certificate verification error | The client host does not match the server certificate SAN. | Regenerate with the exact `Public host` used by the client, or add the host under extra SANs. |
+| Server logs `TLS handshake failed` | Client is using the wrong CA/client certificate pair. | Use the `wcrc-client.json` and `certs/` generated together with the uploaded server bundle. |
+| `cwd is outside base-dir` | The requested `--cwd` is not under server `base_dir`. | Use a remote directory inside `base_dir`, or regenerate/edit server config with the intended base directory. |
+| `shell mode is disabled on this server` | `Allow shell mode` was unchecked or `allow_shell` is false. | Regenerate with shell mode enabled or set `"allow_shell": true` in `wcrc-server.json` before starting the server. |
+| Command exits with non-zero return code | The remote command itself failed. | Re-run with `--json` to inspect `stdout`, `stderr`, and `returncode`. |
+| PowerShell execution policy blocks `.ps1` | Local policy blocks script execution. | Use the `.cmd` helpers or run the direct `python -m ...` command. |
 
 ## Config Files
 
