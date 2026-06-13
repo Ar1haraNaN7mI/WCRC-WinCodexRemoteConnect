@@ -14,6 +14,7 @@ dependencies = ["cryptography>=42.0.0"]
 
 [project.scripts]
 wcrc-make-certs = "wcrc.make_certs:main"
+wcrc-setup = "wcrc.setup_wizard:main"
 wcrc-server = "wcrc.remote_exec_server:main"
 wcrc-client = "wcrc.remote_exec_client:main"
 

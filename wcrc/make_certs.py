@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,6 +13,17 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+
+CERT_FILENAMES = {
+    "ca_key": "ca.key",
+    "ca_cert": "ca.crt",
+    "server_key": "server.key",
+    "server_cert": "server.crt",
+    "client_key": "client.key",
+    "client_cert": "client.crt",
+    "manifest": "FILES.txt",
+}
 
 
 def key() -> rsa.RSAPrivateKey:
@@ -73,10 +85,42 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> None:
-    args = parse_args()
-    out = Path(args.out).resolve()
+def unique_values(values: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
+def build_server_alt_names(server_ips: Iterable[str], server_dns: Iterable[str]) -> list[x509.GeneralName]:
+    alt_names: list[x509.GeneralName] = []
+    for value in unique_values(server_ips):
+        alt_names.append(x509.IPAddress(ipaddress.ip_address(value)))
+    for value in unique_values(server_dns):
+        alt_names.append(x509.DNSName(value))
+    if not alt_names:
+        raise ValueError("provide at least one server IP or DNS name for the server certificate SAN")
+    return alt_names
+
+
+def write_manifest(path: Path) -> None:
+    path.write_text(
+        "Upload to server: ca.crt, server.crt, server.key, wcrc/remote_exec_server.py, wcrc/__init__.py\n"
+        "Keep on local machine only: ca.crt, client.crt, client.key, wcrc/remote_exec_client.py\n"
+        "Never upload client.key to the server.\n",
+        encoding="utf-8",
+    )
+
+
+def generate_certificates(
+    out: str | Path,
+    server_ips: Iterable[str] = (),
+    server_dns: Iterable[str] = (),
+    days: int = 30,
+) -> dict[str, Path]:
+    if days < 1:
+        raise ValueError("days must be at least 1")
+
+    out = Path(out).expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
+    alt_names = build_server_alt_names(server_ips, server_dns)
 
     ca_key = key()
     ca_name = name("WCRC Remote Connect Local CA")
@@ -85,7 +129,7 @@ def main() -> None:
         ca_key.public_key(),
         ca_name,
         ca_key,
-        args.days,
+        days,
         [
             (x509.BasicConstraints(ca=True, path_length=0), True),
             (x509.KeyUsage(True, False, False, False, False, True, True, False, False), True),
@@ -94,17 +138,12 @@ def main() -> None:
     )
 
     server_key = key()
-    alt_names: list[x509.GeneralName] = []
-    for value in dict.fromkeys(args.server_ip):
-        alt_names.append(x509.IPAddress(ipaddress.ip_address(value)))
-    for value in dict.fromkeys(args.server_dns):
-        alt_names.append(x509.DNSName(value))
     server_cert = sign_cert(
         name("wcrc-remote-server"),
         server_key.public_key(),
         ca_cert.subject,
         ca_key,
-        args.days,
+        days,
         [
             (x509.BasicConstraints(ca=False, path_length=None), True),
             (x509.SubjectAlternativeName(alt_names), False),
@@ -121,7 +160,7 @@ def main() -> None:
         client_key.public_key(),
         ca_cert.subject,
         ca_key,
-        args.days,
+        days,
         [
             (x509.BasicConstraints(ca=False, path_length=None), True),
             (x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), False),
@@ -131,19 +170,21 @@ def main() -> None:
         ],
     )
 
-    write_private_key(out / "ca.key", ca_key)
-    write_cert(out / "ca.crt", ca_cert)
-    write_private_key(out / "server.key", server_key)
-    write_cert(out / "server.crt", server_cert)
-    write_private_key(out / "client.key", client_key)
-    write_cert(out / "client.crt", client_cert)
+    paths = {name: out / filename for name, filename in CERT_FILENAMES.items()}
+    write_private_key(paths["ca_key"], ca_key)
+    write_cert(paths["ca_cert"], ca_cert)
+    write_private_key(paths["server_key"], server_key)
+    write_cert(paths["server_cert"], server_cert)
+    write_private_key(paths["client_key"], client_key)
+    write_cert(paths["client_cert"], client_cert)
+    write_manifest(paths["manifest"])
+    return paths
 
-    (out / "FILES.txt").write_text(
-        "Upload to server: ca.crt, server.crt, server.key, wcrc/remote_exec_server.py, wcrc/__init__.py\n"
-        "Keep on local machine only: ca.crt, client.crt, client.key, wcrc/remote_exec_client.py\n"
-        "Never upload client.key to the server.\n",
-        encoding="utf-8",
-    )
+
+def main() -> None:
+    args = parse_args()
+    out = Path(args.out).resolve()
+    generate_certificates(out, server_ips=args.server_ip, server_dns=args.server_dns, days=args.days)
     print(f"Generated certificates in {out}")
 
 
